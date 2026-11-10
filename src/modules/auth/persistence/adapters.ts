@@ -38,6 +38,7 @@ function session(value: unknown): SessionRecord {
   return result;
 }
 const knownErrors: Record<string, number> = {
+  INVALID_CREDENTIALS: 401,
   UNAUTHENTICATED: 401, SESSION_EXPIRED: 401, SESSION_REVOKED: 401,
   RESOURCE_NOT_FOUND: 404, COMPANY_SUSPENDED: 403, COMPANY_PENDING_ACTIVATION: 403,
 };
@@ -50,15 +51,15 @@ function value(rows: unknown): unknown {
   if (envelope.code !== 'OK') {
     const code = text(envelope.code); const status = knownErrors[code];
     if (!status) return unavailable();
-    throw new AuthError(status, code, code === 'RESOURCE_NOT_FOUND' ? 'Recurso no encontrado' : 'Solicitud no autorizada');
+    throw new AuthError(status, code, code === 'INVALID_CREDENTIALS' ? 'Credenciales inválidas' : code === 'RESOURCE_NOT_FOUND' ? 'Recurso no encontrado' : 'Solicitud no autorizada');
   }
   return envelope.value;
 }
 
 /** No datasource/model access here. Client must be built from an explicit scoped runtime URL.
  * A is trusted-backend context transport, not a cryptographic assertion against SQL injection. */
-abstract class ScopedPersistence {
-  constructor(protected readonly client: PrismaClient, private readonly role: 'wc_identity' | 'wc_tenant') {}
+export abstract class ScopedPersistence {
+  constructor(protected readonly client: PrismaClient, private readonly role: 'wc_identity' | 'wc_tenant' | 'wc_delivery') {}
   protected async transaction<T>(operation: string, principal: Principal | undefined, companyId: string | undefined,
     work: (tx: Tx) => Promise<T>): Promise<T> {
     if (principal) { id(principal.userId); id(principal.sessionId); }
@@ -98,7 +99,7 @@ abstract class ScopedPersistence {
 }
 
 export class PrismaIdentityPort extends ScopedPersistence implements IdentityPort {
-  constructor(client: PrismaClient, private readonly cursor: CompanyCursorPort) { super(client, 'wc_identity'); }
+  constructor(client: PrismaClient, private readonly cursor: CompanyCursorPort, private readonly checkedSessions = true) { super(client, 'wc_identity'); }
   credential(email: string): ReturnType<IdentityPort['credential']> {
     return this.transaction('credential', undefined, undefined, async tx => {
       const row = value(await tx.$queryRaw`SELECT app_api.identity_credential(${email}::text) AS result`);
@@ -107,12 +108,17 @@ export class PrismaIdentityPort extends ScopedPersistence implements IdentityPor
       return { userId: id(credential.userId), passwordHash: text(credential.passwordHash) };
     });
   }
-  createSession(userId: string, refreshHash: string): Promise<SessionRecord> {
+  createSession(userId: string, refreshHash: string, expectedPasswordHash: string): Promise<SessionRecord> {
     assertHash(refreshHash);
     const sessionId = randomUUID(); const historyId = randomUUID();
-    return this.transaction('create_session', { userId, sessionId }, undefined, async tx =>
-      session(value(await tx.$queryRaw`SELECT app_api.identity_create_session(${userId}::uuid, ${sessionId}::uuid,
-        ${historyId}::uuid, ${refreshHash}::text) AS result`)));
+    return this.transaction('create_session', { userId, sessionId }, undefined, async tx => {
+      // Compatibilidad SOLO antes de activar recuperación/aplicar005. Tras005,
+      // el grant anterior está revocado: configuración antigua falla cerrado.
+      if (!this.checkedSessions) return session(value(await tx.$queryRaw`SELECT app_api.identity_create_session(${userId}::uuid,
+        ${sessionId}::uuid,${historyId}::uuid,${refreshHash}::text) AS result`));
+      return session(value(await tx.$queryRaw`SELECT app_api.identity_create_session_checked(${userId}::uuid, ${sessionId}::uuid,
+        ${historyId}::uuid, ${refreshHash}::text, ${expectedPasswordHash}::text) AS result`));
+    });
   }
   refreshSession(refreshHash: string): Promise<string | null> {
     assertHash(refreshHash);

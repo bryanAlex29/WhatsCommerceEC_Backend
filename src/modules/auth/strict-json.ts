@@ -53,7 +53,7 @@ export function parseStrictJson(text: string): Record<string, unknown> {
 
 export interface AuthRequest extends IncomingMessage { body?: unknown; ip?: string; params: Record<string, string> }
 // Express/Nest enruta sin distinguir mayúsculas por defecto; la guarda debe coincidir.
-const routes = /^\/api\/(?:auth\/(?:login|refresh|logout|me)|me\/companies|companies\/[^/]+)\/?$/i;
+const routes = /^\/api\/(?:auth\/(?:login|refresh|logout|me|password-recovery\/(?:request|reset))|me\/companies|companies\/[^/]+)\/?$/i;
 /** Se instala antes del parser de Nest; no consume cuerpos ajenos al alcance de auth. */
 export function authJsonMiddleware(enabled: boolean) {
   return (request: AuthRequest, response: ServerResponse, next: () => void): void => {
@@ -66,7 +66,7 @@ export function authJsonMiddleware(enabled: boolean) {
       response.setHeader('Content-Type', 'application/json');
       response.end(JSON.stringify({ error: { code, message: status === 400 ? 'Entrada inválida' : 'Solicitud rechazada' } }));
     };
-    const expectsBody = request.method === 'POST' && /\/auth\/(login|refresh|logout)\/?$/i.test(path);
+    const expectsBody = request.method === 'POST' && /\/auth\/(login|refresh|logout|password-recovery\/(?:request|reset))\/?$/i.test(path);
     const hasBody = request.headers['transfer-encoding'] !== undefined || Number(request.headers['content-length'] ?? '0') > 0;
     if (!expectsBody) {
       if (hasBody) { request.resume(); fail(400, 'VALIDATION_ERROR'); return; }

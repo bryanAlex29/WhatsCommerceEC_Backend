@@ -22,7 +22,7 @@ export class AuthService {
       throw new AuthError(401, 'INVALID_CREDENTIALS', 'Credenciales inválidas');
     }
     const refresh = randomRefresh();
-    return this.tokens(await this.identity.createSession(credential.userId, tokenHash(refresh)), refresh);
+    return this.tokens(await this.identity.createSession(credential.userId, tokenHash(refresh), credential.passwordHash), refresh);
   }
   async refresh(refresh: string, ip: string) {
     await this.limits.consume('refresh-ip', ip);

@@ -9,7 +9,7 @@ const user = { id: principal.userId, email: 'synthetic@example.ec', platformRole
 const session = { principal, user, absoluteExpiresAt: '2026-11-13T12:00:00.000Z' };
 const basic = { representation: 'BASIC', id: companyId, tradeName: 'Synthetic', status: 'ACTIVE' };
 const position = { createdAt: '2026-11-06T12:00:00.123Z', id: '44444444-4444-4444-8444-444444444444' };
-function fixture(envelope: unknown = { code: 'OK', value: user }, safe = true) {
+function fixture(envelope: unknown = { code: 'OK', value: user }, safe = true, checkedSessions = true) {
   const events: string[] = [];
   const query = jest.fn<(sql: TemplateStringsArray, ...values: unknown[]) => Promise<unknown>>()
     .mockResolvedValueOnce([{ safe }]).mockResolvedValueOnce([]).mockResolvedValue([{ result: envelope }]);
@@ -25,7 +25,7 @@ function fixture(envelope: unknown = { code: 'OK', value: user }, safe = true) {
     decode: jest.fn<CompanyCursorPort['decode']>().mockReturnValue(position),
     encode: jest.fn<CompanyCursorPort['encode']>().mockReturnValue('opaque-encrypted-cursor'),
   };
-  return { query, transaction, events, cursor, identity: new PrismaIdentityPort(client, cursor), tenant: new PrismaTenantPort(client) };
+  return { query, transaction, events, cursor, identity: new PrismaIdentityPort(client, cursor, checkedSessions), tenant: new PrismaTenantPort(client) };
 }
 describe('Prisma adapters con cliente transaccional SIMULADO; NO acredita SQL/RLS efectivo', () => {
   it('READ COMMITTED; rol/contexto inicial antes de SET LOCAL y funcion parametrizada', async () => {
@@ -55,7 +55,7 @@ describe('Prisma adapters con cliente transaccional SIMULADO; NO acredita SQL/RL
   });
   it('crea IDs de sesion e historial UUID en servidor y convierte fecha UTC', async () => {
     const f = fixture({ code: 'OK', value: session });
-    const record = await f.identity.createSession(principal.userId, 'a'.repeat(64));
+    const record = await f.identity.createSession(principal.userId, 'a'.repeat(64), '$argon2id$synthetic');
     expect(record.absoluteExpiresAt.toISOString()).toBe(session.absoluteExpiresAt);
     const params = f.query.mock.calls[2]?.slice(1);
     expect(params?.[0]).toBe(principal.userId);
@@ -63,6 +63,14 @@ describe('Prisma adapters con cliente transaccional SIMULADO; NO acredita SQL/RL
     expect(params?.[2]).toMatch(/^[0-9a-f-]{36}$/);
     expect(params?.[1]).not.toBe(params?.[2]);
     expect(params?.[3]).toBe('a'.repeat(64));
+    expect(params?.[4]).toBe('$argon2id$synthetic');
+    expect(f.query.mock.calls[2]?.[0].join('?')).toContain('identity_create_session_checked');
+  });
+  it('sin recuperación conserva función original antes de005, sin fallback después de un error', async () => {
+    const f = fixture({ code: 'OK', value: session }, true, false);
+    await f.identity.createSession(principal.userId, 'a'.repeat(64), '$argon2id$synthetic');
+    expect(f.query.mock.calls[2]?.[0].join('?')).toContain('identity_create_session(');
+    expect(f.query.mock.calls[2]?.slice(1)).toHaveLength(4);
   });
   it.each(['SESSION_REVOKED', 'SESSION_EXPIRED', 'INVALID_REFRESH_TOKEN'] as const)('rotate devuelve %s DESPUES de commit, no rollback', async code => {
     const f = fixture({ code });

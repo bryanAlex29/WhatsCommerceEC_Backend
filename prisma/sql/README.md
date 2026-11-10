@@ -63,3 +63,6 @@ No ejecutar `prisma db push`, `migrate dev`, `migrate deploy` ni `db execute` po
 ## Evidencia de revisión — 6 de noviembre de 2026
 
 Pasaron Prisma validate/generate, comparación offline del DDL, inspector estático, typecheck, lint y build. Jest: **82/82 unitarias** (incluidas **25/25 de artefactos**, también ejecutadas por separado) y **11/11 e2e HTTP**. Estas últimas preservan el bootstrap, no prueban rutas empresariales. `.env`, el cliente generado y `dist/` siguen ignorados por Git. No se instalaron dependencias ni se ejecutó SQL, migración, aprovisionamiento, commit, push o PR. Sintaxis SQL y seguridad efectiva PostgreSQL pendientes de verificación autorizada.
+# Incremento de recuperación
+
+`005_password_recovery.sql` es posterior e independiente de la base000–004. No modificar los archivos previos ya aplicados ni regenerar001. Véase [operación y pruebas de recuperación](../../docs/password-recovery.md). Activar recuperación requiere005 antes de iniciar la API con `RECOVERY_ENABLED=true`. Su aplicación y configuración privada no se ejecutan automáticamente al iniciar la API.

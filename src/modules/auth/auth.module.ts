@@ -1,6 +1,6 @@
 import { ArgumentsHost, Catch, Controller, ExceptionFilter, Get, Header, HttpCode, Module, Param, Post, Req, UseFilters } from '@nestjs/common';
 import type { IncomingHttpHeaders } from 'node:http';
-import { AuthError } from './errors.js';
+import { AuthError, unavailable } from './errors.js';
 import { uuid } from './input.js';
 import { RateLimitError } from './rate-limit.js';
 import { AuthRuntime } from './runtime.js';
@@ -62,6 +62,21 @@ function authorization(headers: IncomingHttpHeaders): string | undefined {
 @UseFilters(AuthExceptionFilter)
 export class AuthController {
   constructor(private readonly runtime: AuthRuntime) {}
+  @Post('auth/password-recovery/request') @HttpCode(202) @Header('Cache-Control', 'no-store')
+  async recoveryRequest(@Req() request: AuthRequest) {
+    const { recovery } = await this.runtime.ready();
+    if (!recovery) unavailable();
+    query(request);
+    return recovery.request(body(request, ['email']).email ?? '', this.ip(request));
+  }
+  @Post('auth/password-recovery/reset') @HttpCode(204) @Header('Cache-Control', 'no-store')
+  async recoveryReset(@Req() request: AuthRequest): Promise<void> {
+    const { recovery } = await this.runtime.ready();
+    if (!recovery) unavailable();
+    query(request);
+    const input = body(request, ['email', 'code', 'password']);
+    await recovery.reset(input.email ?? '', input.code ?? '', input.password ?? '', this.ip(request));
+  }
   @Post('auth/login') @HttpCode(200) @Header('Cache-Control', 'no-store')
   async login(@Req() request: AuthRequest) {
     const { service } = await this.runtime.ready();

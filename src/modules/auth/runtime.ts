@@ -12,8 +12,9 @@ import { CompanyCursor } from './cursor.js';
 import { unavailable } from './errors.js';
 import type { IdentityPort, TenantPort } from './ports.js';
 import { RedisRateLimits } from './rate-limit.js';
+import { RecoveryCrypto, RecoveryService } from './recovery.js';
 
-export interface AuthDependencies { service: AuthService; identity: IdentityPort; tenant: TenantPort }
+export interface AuthDependencies { service: AuthService; identity: IdentityPort; tenant: TenantPort; recovery?: RecoveryService }
 /** Sin conexiones al boot. Solo configuración explícita habilita adaptadores reales. */
 @Injectable()
 export class AuthRuntime implements OnModuleDestroy {
@@ -65,11 +66,16 @@ export class AuthRuntime implements OnModuleDestroy {
         return redis.eval(script, 1, key, ...args);
       },
     }, Buffer.from(required('AUTH_RATE_LIMIT_KEY'), 'base64url'));
-    const identity = new PrismaIdentityPort(identityClient, new CompanyCursor(Buffer.from(required('AUTH_CURSOR_KEY'), 'base64url')));
+    const identity = new PrismaIdentityPort(identityClient, new CompanyCursor(Buffer.from(required('AUTH_CURSOR_KEY'), 'base64url')),
+      config.get('RECOVERY_ENABLED', { infer: true }) === true);
     const tenant = new PrismaTenantPort(tenantClient);
     // Aleatorio y privado, únicamente iguala el coste para una cuenta inexistente.
     const dummyHash = await hashPassword(randomBytes(32).toString('base64url'));
     const service = new AuthService(identity, limits, new AccessTokens(Buffer.from(required('AUTH_JWT_KEY'), 'base64url')), dummyHash);
-    return { service, identity, tenant };
+    if (!config.get('RECOVERY_ENABLED', { infer: true })) return { service, identity, tenant };
+    const { PrismaRecoveryPort } = await import('./persistence/recovery-adapter.js');
+    const recovery = new RecoveryService(new PrismaRecoveryPort(identityClient), limits,
+      new RecoveryCrypto(Buffer.from(required('RECOVERY_MAC_KEY'), 'base64url'), Buffer.from(required('RECOVERY_ENCRYPTION_KEY'), 'base64url')));
+    return { service, identity, tenant, recovery };
   }
 }

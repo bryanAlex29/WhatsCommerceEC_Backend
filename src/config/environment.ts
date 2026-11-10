@@ -10,6 +10,16 @@ export interface Environment {
   AUTH_JWT_KEY?: string;
   AUTH_CURSOR_KEY?: string;
   AUTH_RATE_LIMIT_KEY?: string;
+  RECOVERY_ENABLED?: boolean;
+  RECOVERY_MAC_KEY?: string;
+  RECOVERY_ENCRYPTION_KEY?: string;
+  RECOVERY_DELIVERY_DATABASE_URL?: string;
+  SMTP_USER?: string;
+  SMTP_APP_PASSWORD?: string;
+  RECOVERY_MAIL_TRANSPORT?: 'smtp' | 'gmail-api';
+  GMAIL_OAUTH_CLIENT_ID?: string;
+  GMAIL_OAUTH_CLIENT_SECRET?: string;
+  GMAIL_OAUTH_REFRESH_TOKEN?: string;
 }
 
 function fail(key: string): never {
@@ -73,6 +83,38 @@ export function validateEnvironment(raw: Record<string, unknown>): Environment {
       config[key] = value;
     }
     if (!config.REDIS_URL) fail('REDIS_URL');
+  }
+  const recovery = raw.RECOVERY_ENABLED ?? 'false';
+  if (!['true', 'false'].includes(String(recovery))) fail('RECOVERY_ENABLED');
+  if (String(recovery) === 'true') {
+    if (!config.AUTH_ENABLED || nodeEnv === 'production') fail('RECOVERY_ENABLED');
+    config.RECOVERY_ENABLED = true;
+    const secrets = new Set([config.AUTH_JWT_KEY, config.AUTH_CURSOR_KEY, config.AUTH_RATE_LIMIT_KEY]);
+    for (const key of ['RECOVERY_MAC_KEY', 'RECOVERY_ENCRYPTION_KEY'] as const) {
+      const value = raw[key];
+      if (typeof value !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(value) || Buffer.from(value, 'base64url').toString('base64url') !== value || secrets.has(value)) fail(key);
+      secrets.add(value); config[key] = value;
+    }
+    const delivery = validateUrl(raw.RECOVERY_DELIVERY_DATABASE_URL, 'RECOVERY_DELIVERY_DATABASE_URL', ['postgresql:', 'postgres:']);
+    const url = new URL(delivery);
+    if (url.username !== 'wc_delivery' || !url.password || !url.pathname.slice(1)) fail('RECOVERY_DELIVERY_DATABASE_URL');
+    config.RECOVERY_DELIVERY_DATABASE_URL = delivery;
+    if (typeof raw.SMTP_USER !== 'string' || !/^[a-z0-9]+(?:[a-z0-9.]*[a-z0-9])?@gmail\.com$/.test(raw.SMTP_USER)) fail('SMTP_USER');
+    config.SMTP_USER = raw.SMTP_USER;
+    const transport = raw.RECOVERY_MAIL_TRANSPORT ?? 'smtp';
+    if (transport !== 'smtp' && transport !== 'gmail-api') fail('RECOVERY_MAIL_TRANSPORT');
+    config.RECOVERY_MAIL_TRANSPORT = transport;
+    if (transport === 'smtp') {
+      if (typeof raw.SMTP_APP_PASSWORD !== 'string' || !/^[a-z]{16}$/.test(raw.SMTP_APP_PASSWORD)) fail('SMTP_APP_PASSWORD');
+      config.SMTP_APP_PASSWORD = raw.SMTP_APP_PASSWORD;
+    } else {
+      if (typeof raw.GMAIL_OAUTH_CLIENT_ID !== 'string' || !/^[A-Za-z0-9_-]+\.apps\.googleusercontent\.com$/.test(raw.GMAIL_OAUTH_CLIENT_ID)) fail('GMAIL_OAUTH_CLIENT_ID');
+      if (typeof raw.GMAIL_OAUTH_CLIENT_SECRET !== 'string' || !/^[A-Za-z0-9_-]{16,256}$/.test(raw.GMAIL_OAUTH_CLIENT_SECRET)) fail('GMAIL_OAUTH_CLIENT_SECRET');
+      if (typeof raw.GMAIL_OAUTH_REFRESH_TOKEN !== 'string' || !/^[A-Za-z0-9._~+/=-]{10,4096}$/.test(raw.GMAIL_OAUTH_REFRESH_TOKEN)) fail('GMAIL_OAUTH_REFRESH_TOKEN');
+      config.GMAIL_OAUTH_CLIENT_ID = raw.GMAIL_OAUTH_CLIENT_ID;
+      config.GMAIL_OAUTH_CLIENT_SECRET = raw.GMAIL_OAUTH_CLIENT_SECRET;
+      config.GMAIL_OAUTH_REFRESH_TOKEN = raw.GMAIL_OAUTH_REFRESH_TOKEN;
+    }
   }
   return config;
 }

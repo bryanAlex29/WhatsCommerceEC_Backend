@@ -9,7 +9,7 @@ export type RotationResult = { code: 'OK'; session: SessionRecord } |
  * No general model access is permitted. Tenant must reauthorize inside its own transaction. */
 export interface IdentityPort {
   credential(email: string): Promise<{ userId: string; passwordHash: string } | null>;
-  createSession(userId: string, refreshHash: string): Promise<SessionRecord>;
+  createSession(userId: string, refreshHash: string, expectedPasswordHash: string): Promise<SessionRecord>;
   refreshSession(refreshHash: string): Promise<string | null>;
   rotate(refreshHash: string, replacementHash: string): Promise<RotationResult>;
   logout(refreshHash: string): Promise<void>;
@@ -28,7 +28,8 @@ export interface CompanyFull extends Omit<CompanyBasic, 'representation'> {
 export interface TenantPort { company(principal: Principal, companyId: string): Promise<CompanyBasic | CompanyFull> }
 export interface RateLimitPort {
   checkLoginFailures(key: string): Promise<void>;
-  consume(scope: 'login-ip' | 'login-failure' | 'refresh-ip' | 'refresh-session' | 'logout-ip', key: string): Promise<void>;
+  consume(scope: 'login-ip' | 'login-failure' | 'refresh-ip' | 'refresh-session' | 'logout-ip' |
+    'recovery-ip' | 'recovery-email-minute' | 'recovery-email-hour' | 'recovery-reset-ip', key: string): Promise<void>;
 }
 /** Deliberately unavailable: never a mock or in-memory authentication runtime. */
 export class UnavailablePersistence implements IdentityPort, TenantPort {

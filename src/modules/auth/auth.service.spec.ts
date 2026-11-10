@@ -29,12 +29,13 @@ describe('AuthService con puertos SIMULADOS: no acredita PostgreSQL ni RLS', () 
     return { identity, limits, jwt, service: new AuthService(identity, limits, jwt, phc) };
   }
   it('credenciales válidas; jamás devuelve hash y no extiende vencimiento absoluto', async () => {
-    const { service } = fixture();
+    const { service, identity } = fixture();
     const result = await service.login(user.email, 'SyntheticPassword!', '127.0.0.1');
     expect(result.user).toEqual(user);
     expect(result.expiresIn).toBe(900);
     expect(result.refreshExpiresAt).toBe(session.absoluteExpiresAt.toISOString());
     expect(JSON.stringify(result)).not.toContain(phc);
+    expect(identity.createSession).toHaveBeenCalledWith(principal.userId, expect.any(String), phc);
   });
   it('contraseña incorrecta e identidad ausente tienen mismo error', async () => {
     const { service, identity } = fixture();
