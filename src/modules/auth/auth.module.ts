@@ -121,5 +121,5 @@ export class AuthController {
     return request.socket.remoteAddress ?? 'unknown';
   }
 }
-@Module({ controllers: [AuthController], providers: [AuthRuntime] })
+@Module({ controllers: [AuthController], providers: [AuthRuntime], exports: [AuthRuntime] })
 export class AuthModule {}

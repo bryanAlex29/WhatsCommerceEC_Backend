@@ -54,11 +54,12 @@ export function parseStrictJson(text: string): Record<string, unknown> {
 export interface AuthRequest extends IncomingMessage { body?: unknown; ip?: string; params: Record<string, string> }
 // Express/Nest enruta sin distinguir mayúsculas por defecto; la guarda debe coincidir.
 const routes = /^\/api\/(?:auth\/(?:login|refresh|logout|me|password-recovery\/(?:request|reset))|me\/companies|companies\/[^/]+)\/?$/i;
-/** Se instala antes del parser de Nest; no consume cuerpos ajenos al alcance de auth. */
+const companyRoutes = /^\/api\/(?:platform\/companies(?:\/[^/]+(?:\/(?:suspend|reactivate|branches(?:\/[^/]+)?))?)?|companies\/[^/]+\/branches)\/?$/i;
+/** Antes del parser de Nest; valida cuerpos solo en las rutas de acceso/contexto/empresas. */
 export function authJsonMiddleware(enabled: boolean) {
   return (request: AuthRequest, response: ServerResponse, next: () => void): void => {
     const path = (request.url ?? '').split('?')[0] ?? '';
-    if (!enabled || !routes.test(path)) { next(); return; }
+    if (!enabled || (!routes.test(path) && !companyRoutes.test(path))) { next(); return; }
     response.setHeader('Cache-Control', 'no-store');
     const fail = (status: number, code: string): void => {
       if (response.writableEnded) return;
@@ -66,7 +67,9 @@ export function authJsonMiddleware(enabled: boolean) {
       response.setHeader('Content-Type', 'application/json');
       response.end(JSON.stringify({ error: { code, message: status === 400 ? 'Entrada inválida' : 'Solicitud rechazada' } }));
     };
-    const expectsBody = request.method === 'POST' && /\/auth\/(login|refresh|logout|password-recovery\/(?:request|reset))\/?$/i.test(path);
+    const expectsBody = (request.method === 'POST' && /\/auth\/(login|refresh|logout|password-recovery\/(?:request|reset))\/?$/i.test(path)) ||
+      (request.method === 'POST' && /^\/api\/platform\/companies(?:\/[^/]+\/branches)?\/?$/i.test(path)) ||
+      (request.method === 'PATCH' && /^\/api\/platform\/companies\/[^/]+(?:\/branches\/[^/]+)?\/?$/i.test(path));
     const hasBody = request.headers['transfer-encoding'] !== undefined || Number(request.headers['content-length'] ?? '0') > 0;
     if (!expectsBody) {
       if (hasBody) { request.resume(); fail(400, 'VALIDATION_ERROR'); return; }

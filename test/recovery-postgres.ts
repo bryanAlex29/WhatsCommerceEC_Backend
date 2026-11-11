@@ -39,7 +39,7 @@ try {
     await setTimeout(250);
   }
   assert.ok(ready);
-  for (const file of ['000_roles.sql','001_schema.sql','002_constraints.sql','003_rls.sql','004_auth_context.sql','005_password_recovery.sql']) run(readFileSync(new URL(`../prisma/sql/${file}`,import.meta.url),'utf8'));
+  for (const file of ['000_roles.sql','001_schema.sql','002_constraints.sql','003_rls.sql','004_auth_context.sql','005_password_recovery.sql','006_companies.sql']) run(readFileSync(new URL(`../prisma/sql/${file}`,import.meta.url),'utf8'));
   run(`INSERT INTO app_private.app_user(id,email_normalized,password_hash) VALUES(${quote(uid)},${quote(email)},${quote(oldHash)})`);
   const session = JSON.parse(scoped('wc_identity','create_session',`SELECT app_api.identity_create_session_checked(${quote(uid)},${quote(sid)},${quote(randomUUID())},${quote('a'.repeat(64))},${quote(oldHash)})`,uid,sid)) as { code: string };
   check(session.code === 'OK');

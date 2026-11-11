@@ -5,14 +5,15 @@ import { uuid } from './input.js';
 
 interface Position { createdAt: string; id: string }
 export class CompanyCursor {
-  constructor(private readonly key: Uint8Array, private readonly now = () => Date.now()) {
+  constructor(private readonly key: Uint8Array, private readonly now = () => Date.now(),
+    private readonly scope = 'me-companies') {
     if (key.byteLength !== 32) throw new Error('Configuración de cursor inválida');
   }
   encode(position: Position, principal: Principal): string {
     this.position(position);
     const nonce = randomBytes(12);
     const cipher = createCipheriv('aes-256-gcm', this.key, nonce);
-    cipher.setAAD(Buffer.from('whatscommerceec:me-companies:v1'));
+    cipher.setAAD(Buffer.from(`whatscommerceec:${this.scope}:v1`));
     const iat = this.now();
     const ciphertext = Buffer.concat([cipher.update(JSON.stringify({ ...position, ...principal, iat, exp: iat + 900000 })), cipher.final()]);
     return ['v1', nonce.toString('base64url'), ciphertext.toString('base64url'), cipher.getAuthTag().toString('base64url')].join('.');
@@ -33,7 +34,7 @@ export class CompanyCursor {
       const tag = decode(parts[3] ?? '');
       if (nonce.length !== 12 || tag.length !== 16) throw new Error();
       const decipher = createDecipheriv('aes-256-gcm', this.key, nonce);
-      decipher.setAAD(Buffer.from('whatscommerceec:me-companies:v1'));
+      decipher.setAAD(Buffer.from(`whatscommerceec:${this.scope}:v1`));
       decipher.setAuthTag(tag);
       const value: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat([decipher.update(ciphertext), decipher.final()])));
       if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error();

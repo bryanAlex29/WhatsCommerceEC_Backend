@@ -59,7 +59,7 @@ function value(rows: unknown): unknown {
 /** No datasource/model access here. Client must be built from an explicit scoped runtime URL.
  * A is trusted-backend context transport, not a cryptographic assertion against SQL injection. */
 export abstract class ScopedPersistence {
-  constructor(protected readonly client: PrismaClient, private readonly role: 'wc_identity' | 'wc_tenant' | 'wc_delivery') {}
+  constructor(protected readonly client: PrismaClient, private readonly role: 'wc_identity' | 'wc_tenant' | 'wc_delivery' | 'wc_platform') {}
   protected async transaction<T>(operation: string, principal: Principal | undefined, companyId: string | undefined,
     work: (tx: Tx) => Promise<T>): Promise<T> {
     if (principal) { id(principal.userId); id(principal.sessionId); }

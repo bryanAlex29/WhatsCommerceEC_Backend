@@ -10,6 +10,8 @@ export interface Environment {
   AUTH_JWT_KEY?: string;
   AUTH_CURSOR_KEY?: string;
   AUTH_RATE_LIMIT_KEY?: string;
+  COMPANIES_ENABLED?: boolean;
+  COMPANIES_PLATFORM_DATABASE_URL?: string;
   RECOVERY_ENABLED?: boolean;
   RECOVERY_MAC_KEY?: string;
   RECOVERY_ENCRYPTION_KEY?: string;
@@ -83,6 +85,18 @@ export function validateEnvironment(raw: Record<string, unknown>): Environment {
       config[key] = value;
     }
     if (!config.REDIS_URL) fail('REDIS_URL');
+  }
+  const companies = raw.COMPANIES_ENABLED ?? 'false';
+  if (!['true', 'false'].includes(String(companies))) fail('COMPANIES_ENABLED');
+  if (String(companies) === 'true') {
+    if (!config.AUTH_ENABLED || nodeEnv === 'production') fail('COMPANIES_ENABLED');
+    const platform = validateUrl(raw.COMPANIES_PLATFORM_DATABASE_URL, 'COMPANIES_PLATFORM_DATABASE_URL', ['postgresql:', 'postgres:']);
+    const url = new URL(platform);
+    let username: string;
+    try { username = decodeURIComponent(url.username); } catch { return fail('COMPANIES_PLATFORM_DATABASE_URL'); }
+    if (username !== 'wc_platform' || !url.password || !url.pathname.slice(1)) fail('COMPANIES_PLATFORM_DATABASE_URL');
+    config.COMPANIES_ENABLED = true;
+    config.COMPANIES_PLATFORM_DATABASE_URL = platform;
   }
   const recovery = raw.RECOVERY_ENABLED ?? 'false';
   if (!['true', 'false'].includes(String(recovery))) fail('RECOVERY_ENABLED');

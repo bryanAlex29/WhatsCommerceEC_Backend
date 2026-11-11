@@ -66,3 +66,7 @@ Pasaron Prisma validate/generate, comparación offline del DDL, inspector estát
 # Incremento de recuperación
 
 `005_password_recovery.sql` es posterior e independiente de la base000–004. No modificar los archivos previos ya aplicados ni regenerar001. Véase [operación y pruebas de recuperación](../../docs/password-recovery.md). Activar recuperación requiere005 antes de iniciar la API con `RECOVERY_ENABLED=true`. Su aplicación y configuración privada no se ejecutan automáticamente al iniciar la API.
+
+# Incremento Empresas (bloque 1)
+
+`006_companies.sql` requiere 000–005, conserva sus bytes y agrega solo las funciones/políticas de administración empresarial y consulta autorizada de sucursales. No incluye invitaciones ni aprovisiona LOGIN/password por sí solo. Probado en PostgreSQL17 desechable y posteriormente aplicado en DEV local con autorización, respaldo cifrado/restauración comprobada y recibo `wc_ops.companies_receipt`. El script operativo aprovisionó `wc_platform` restringido y un overlay privado separado. Véase [guía de Empresas](../../docs/companies.md). Otra aplicación requiere autorización específica; no ejecutar el conjunto anterior otra vez.
