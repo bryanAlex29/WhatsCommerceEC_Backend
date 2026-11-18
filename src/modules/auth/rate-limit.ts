@@ -36,6 +36,7 @@ export class RedisRateLimits implements RateLimitPort {
       'refresh-ip': [60000, 60], 'refresh-session': [60000, 30], 'logout-ip': [60000, 60],
       'recovery-ip': [900000, 10], 'recovery-email-minute': [60000, 1],
       'recovery-email-hour': [3600000, 3], 'recovery-reset-ip': [900000, 10],
+      'invitation-accept-ip': [900000, 10],
     }[scope];
     const digest = createHmac('sha256', this.secret).update(scope).update('\0').update(key).digest('hex');
     let result: unknown;

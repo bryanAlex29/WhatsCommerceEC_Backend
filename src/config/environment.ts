@@ -12,6 +12,10 @@ export interface Environment {
   AUTH_RATE_LIMIT_KEY?: string;
   COMPANIES_ENABLED?: boolean;
   COMPANIES_PLATFORM_DATABASE_URL?: string;
+  INVITATIONS_ENABLED?: boolean;
+  INVITATION_OUTBOX_KEY?: string;
+  INVITATION_DELIVERY_DATABASE_URL?: string;
+  INVITATION_MAILPIT_PORT?: number;
   RECOVERY_ENABLED?: boolean;
   RECOVERY_MAC_KEY?: string;
   RECOVERY_ENCRYPTION_KEY?: string;
@@ -129,6 +133,21 @@ export function validateEnvironment(raw: Record<string, unknown>): Environment {
       config.GMAIL_OAUTH_CLIENT_SECRET = raw.GMAIL_OAUTH_CLIENT_SECRET;
       config.GMAIL_OAUTH_REFRESH_TOKEN = raw.GMAIL_OAUTH_REFRESH_TOKEN;
     }
+  }
+  const invitations = raw.INVITATIONS_ENABLED ?? 'false';
+  if (!['true', 'false'].includes(String(invitations))) fail('INVITATIONS_ENABLED');
+  if (String(invitations) === 'true') {
+    if (!config.AUTH_ENABLED || !config.COMPANIES_ENABLED || nodeEnv === 'production') fail('INVITATIONS_ENABLED');
+    const value = raw.INVITATION_OUTBOX_KEY;
+    if (typeof value !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(value) || Buffer.from(value, 'base64url').toString('base64url') !== value ||
+      [config.AUTH_JWT_KEY, config.AUTH_CURSOR_KEY, config.AUTH_RATE_LIMIT_KEY, config.RECOVERY_MAC_KEY, config.RECOVERY_ENCRYPTION_KEY].includes(value)) fail('INVITATION_OUTBOX_KEY');
+    const delivery = validateUrl(raw.INVITATION_DELIVERY_DATABASE_URL, 'INVITATION_DELIVERY_DATABASE_URL', ['postgresql:', 'postgres:']);
+    const url = new URL(delivery);
+    if (url.username !== 'wc_delivery' || !url.password || !url.pathname.slice(1)) fail('INVITATION_DELIVERY_DATABASE_URL');
+    const port = String(raw.INVITATION_MAILPIT_PORT ?? '1025');
+    if (!/^[0-9]+$/.test(port) || Number(port) < 1024 || Number(port) > 65535) fail('INVITATION_MAILPIT_PORT');
+    config.INVITATIONS_ENABLED = true; config.INVITATION_OUTBOX_KEY = value;
+    config.INVITATION_DELIVERY_DATABASE_URL = delivery; config.INVITATION_MAILPIT_PORT = Number(port);
   }
   return config;
 }

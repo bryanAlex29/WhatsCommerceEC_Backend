@@ -30,6 +30,8 @@
     "gmail:verify:local": "tsx scripts/gmail-verify.ts",
     "test:recovery:postgres": "tsx test/recovery-postgres.ts",
     "test:companies:postgres": "npm run build && tsx test/companies-postgres.ts",
+    "test:invitations:postgres": "npm run build && tsx test/invitations-postgres.ts",
+    "invitations:worker": "tsx scripts/invitations-worker.ts",
     "companies:preflight:local": "tsx scripts/companies-local.ts --preflight",
     "companies:apply:local": "tsx scripts/companies-local.ts --apply-approved-dev",
     "companies:verify:local": "tsx scripts/companies-local.ts --verify",

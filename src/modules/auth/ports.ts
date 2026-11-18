@@ -29,7 +29,7 @@ export interface TenantPort { company(principal: Principal, companyId: string): 
 export interface RateLimitPort {
   checkLoginFailures(key: string): Promise<void>;
   consume(scope: 'login-ip' | 'login-failure' | 'refresh-ip' | 'refresh-session' | 'logout-ip' |
-    'recovery-ip' | 'recovery-email-minute' | 'recovery-email-hour' | 'recovery-reset-ip', key: string): Promise<void>;
+    'recovery-ip' | 'recovery-email-minute' | 'recovery-email-hour' | 'recovery-reset-ip' | 'invitation-accept-ip', key: string): Promise<void>;
 }
 /** Deliberately unavailable: never a mock or in-memory authentication runtime. */
 export class UnavailablePersistence implements IdentityPort, TenantPort {
