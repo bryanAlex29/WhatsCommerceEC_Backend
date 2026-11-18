@@ -34,6 +34,7 @@
     "companies:apply:local": "tsx scripts/companies-local.ts --apply-approved-dev",
     "companies:verify:local": "tsx scripts/companies-local.ts --verify",
     "test:auth:real": "tsx test/auth-real.ts",
+    "test:auth:isolated": "npm run build && tsx test/auth-isolated.ts",
     "test:persistence": "node --experimental-vm-modules node_modules/jest/bin/jest.js --runInBand --testPathPatterns=\"persistence-artifacts|render-schema-sql\"",
     "setup:local": "tsx scripts/setup-local.ts",
     "infra:up": "tsx scripts/infra-compose.ts up",

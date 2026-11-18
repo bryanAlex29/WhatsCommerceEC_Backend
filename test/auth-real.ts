@@ -21,8 +21,16 @@ interface Tokens { accessToken: string; refreshToken: string; refreshExpiresAt: 
 interface Page { items: Array<{ companyId: string; status: string; role: string }>; nextCursor: string | null }
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 
-/** Explicit DEV acceptance entrypoint; importing this file never creates fixtures. */
-export async function main(): Promise<void> {
+export interface AcceptanceTarget {
+  loadProfiles: typeof loadProfiles;
+  verifyAdmin: typeof verifyAdmin;
+  databaseUrl: typeof databaseUrl;
+  httpTimeoutMs?: number;
+  stopDisposableRedis?: () => Promise<void>;
+}
+/** Default remains explicitly approved DEV only. Disposable runner injects its
+ * own validated, freshly created containers; no environment-driven redirection. */
+export async function main(target: AcceptanceTarget = { loadProfiles, verifyAdmin, databaseUrl }): Promise<void> {
   let current = 'PROFILE'; let passed = 0; let fixtureId = 'none';
   let app: INestApplication | undefined;
   const close: Array<() => Promise<unknown>> = [];
@@ -35,11 +43,13 @@ export async function main(): Promise<void> {
     current = name; await work(); passed++;
   };
   try {
-    const { runtime, adminUrl } = loadProfiles();
+    const httpTimeout = target.httpTimeoutMs ?? 5000;
+    check(Number.isInteger(httpTimeout) && httpTimeout >= 5000 && httpTimeout <= 15000, 'INVALID_TEST_TIMEOUT');
+    const { runtime, adminUrl } = target.loadProfiles();
     const admin = pool(adminUrl); close.push(() => admin.end());
     const verification = await admin.connect();
     try {
-      await verifyAdmin(verification);
+      await target.verifyAdmin(verification);
       check(await checkReceipt(verification, sqlBundle(root).checksum), 'SETUP_RECEIPT_MISSING');
     } finally { verification.release(); }
     current = 'FIXTURE';
@@ -54,9 +64,9 @@ export async function main(): Promise<void> {
     app = await NestFactory.create(AppModule, { logger: false, bodyParser: false, abortOnError: false });
     configureApp(app); await app.listen(0, '127.0.0.1');
     const api = request(app.getHttpServer());
-    const post = (path: string, body: object) => api.post(`/api/${path}`).send(body).timeout(5000);
+    const post = (path: string, body: object) => api.post(`/api/${path}`).send(body).timeout(httpTimeout);
     const get = (path: string, token?: string) => {
-      const req = api.get(`/api/${path}`).timeout(5000);
+      const req = api.get(`/api/${path}`).timeout(httpTimeout);
       return token ? req.set('Authorization', `Bearer ${token}`) : req;
     };
     const status = (response: request.Response, expected: number, code?: string) => {
@@ -84,7 +94,7 @@ export async function main(): Promise<void> {
       const expiry = Date.parse(seller.refreshExpiresAt) - Date.now(); check(expiry > 0 && expiry <= 7 * 86400_000);
     });
     await test('STRICT_JSON', async () => {
-      status(await api.post('/api/auth/login').type('json').send('{"email":"a@example.test","email":"b@example.test","password":"A!synthetic-password"}').timeout(5000), 400);
+      status(await api.post('/api/auth/login').type('json').send('{"email":"a@example.test","email":"b@example.test","password":"A!synthetic-password"}').timeout(httpTimeout), 400);
       status(await post('auth/login', { email: f.sellerEmail, password: f.password, role: 'PLATFORM_ADMIN' }), 400);
       status(await post('auth/login', { email: f.sellerEmail, password: 'A'.repeat(16 * 1024) }), 413, 'PAYLOAD_TOO_LARGE');
     });
@@ -101,6 +111,19 @@ export async function main(): Promise<void> {
       };
       status(await get('auth/me', await issue(Buffer.from(runtime.AUTH_JWT_KEY!, 'base64url'))), 401, 'ACCESS_TOKEN_EXPIRED');
       status(await get('auth/me', await issue(randomBytes(32))), 401, 'UNAUTHENTICATED');
+    });
+    await test('EXPIRED_SESSION_WITH_FRESH_JWT', async () => {
+      const sessionId = randomUUID(); const connection = await admin.connect();
+      try {
+        await connection.query('BEGIN');
+        await connection.query(`INSERT INTO app_private.app_session(id,user_id,created_at,absolute_expires_at)
+          VALUES($1,$2,clock_timestamp()-interval '2 days',clock_timestamp()-interval '1 day')`, [sessionId, f.sellerId]);
+        await connection.query(`INSERT INTO app_private.refresh_token_history(id,session_id,generation,token_hash,issued_at)
+          VALUES($1,$2,1,$3,clock_timestamp()-interval '2 days')`, [randomUUID(), sessionId, randomBytes(32)]);
+        await connection.query('COMMIT');
+      } catch (error) { await connection.query('ROLLBACK'); throw error; } finally { connection.release(); }
+      const jwt = new AccessTokens(Buffer.from(runtime.AUTH_JWT_KEY!, 'base64url'));
+      status(await get('auth/me', await jwt.issue({ userId: f.sellerId, sessionId })), 401, 'SESSION_EXPIRED');
     });
     await test('SELECTOR_MINIMAL', async () => {
       const response = await get('me/companies', seller.accessToken); status(response, 200);
@@ -193,6 +216,14 @@ export async function main(): Promise<void> {
       const page = response.body as Page; check(page.items[0]?.status === 'SUSPENDED');
       check(same(Object.keys(page.items[0]!).sort(), ['companyId', 'role', 'status', 'tradeName']));
     });
+    await test('PENDING_COMPANY_STATE_AFTER_MEMBERSHIP', async () => {
+      const cid = randomUUID(); const ruc = `7${String(randomBytes(6).readUIntBE(0, 6) % 1_000_000_000_000).padStart(12, '0')}`;
+      await admin.query(`INSERT INTO app_private.company(id,trade_name,legal_name,ruc,tax_address,contact_email,contact_phone)
+        VALUES($1,'SYNTHETIC pending','SYNTHETIC pending',$2,'SYNTHETIC','pending@example.test','+593999999999')`, [cid, ruc]);
+      await admin.query("INSERT INTO app_private.membership(id,user_id,company_id,role) VALUES($1,$2,$3,'SELLER')", [randomUUID(), f.sellerId, cid]);
+      status(await get(`companies/${cid}`, seller.accessToken), 403, 'COMPANY_PENDING_ACTIVATION');
+      status(await get(`companies/${cid}`, manager.accessToken), 404, 'RESOURCE_NOT_FOUND');
+    });
     await test('LOGOUT_PERSISTED_UNKNOWN_IDEMPOTENT', async () => {
       status(await post('auth/logout', { refreshToken: seller.refreshToken }), 204);
       check(await revoked(admin, sid(seller))); status(await get('auth/me', seller.accessToken), 401, 'SESSION_REVOKED');
@@ -220,14 +251,14 @@ export async function main(): Promise<void> {
       status(await post('auth/logout', { refreshToken: original.refreshToken }), 204);
       check(await revoked(admin, sid(original))); status(await get('auth/me', (response.body as Tokens).accessToken), 401, 'SESSION_REVOKED');
     });
-    const identityPool = pool(databaseUrl(runtime.AUTH_IDENTITY_DATABASE_URL, 'wc_identity'));
+    const identityPool = pool(target.databaseUrl(runtime.AUTH_IDENTITY_DATABASE_URL, 'wc_identity'));
     close.push(() => identityPool.end());
     const prisma = new PrismaClient({ adapter: new PrismaPg(identityPool, { schema: 'app_private' }), log: [], errorFormat: 'minimal' });
     close.push(() => prisma.$disconnect());
     const identity = new PrismaIdentityPort(prisma, new CompanyCursor(Buffer.from(runtime.AUTH_CURSOR_KEY!, 'base64url')));
     await test('SQL_EFFECTIVE_ROLES_DENY', async () => {
       for (const [url, role] of [[runtime.AUTH_IDENTITY_DATABASE_URL, 'wc_identity'], [runtime.AUTH_TENANT_DATABASE_URL, 'wc_tenant']] as const) {
-        const scoped = pool(databaseUrl(url, role));
+        const scoped = pool(target.databaseUrl(url, role));
         try {
           const actual = await scoped.query<{ role: string }>('SELECT current_user AS role'); check(actual.rows[0]?.role === role);
           const denied = async (sql: string, values: unknown[] = []) => {
@@ -300,6 +331,15 @@ export async function main(): Promise<void> {
       const blocked = await post('auth/login', { email, password: f.password });
       status(blocked, 429, 'RATE_LIMITED');
       check(/^\d+$/.test(String(blocked.headers['retry-after'])) && Number(blocked.headers['retry-after']) > 0, 'RETRY_AFTER_MISSING');
+    });
+    if (target.stopDisposableRedis) await test('DISPOSABLE_REDIS_DOWN_HTTP503_LOGOUT_PERSISTS', async () => {
+      const original = await login();
+      await target.stopDisposableRedis!(); // Only injected by the disposable-container runner.
+      status(await post('auth/login', { email: f.sellerEmail, password: f.password }), 503, 'SERVICE_TEMPORARILY_UNAVAILABLE');
+      status(await post('auth/refresh', { refreshToken: original.refreshToken }), 503, 'SERVICE_TEMPORARILY_UNAVAILABLE');
+      status(await post('auth/logout', { refreshToken: original.refreshToken }), 503, 'SERVICE_TEMPORARILY_UNAVAILABLE');
+      check(await revoked(admin, sid(original)));
+      status(await get('auth/me', original.accessToken), 401, 'SESSION_REVOKED');
     });
     process.stdout.write(`PASS ${passed} fixture=${fixtureId}\n`);
   } catch (error) {
