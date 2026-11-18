@@ -1,0 +1,225 @@
+// Primera entrega 1.4a: modelo revisable, no autorización para aplicar DDL.
+// CHECK, triggers y diferibilidad se completan en sql/002_constraints.sql.
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  schemas  = ["app_private"]
+}
+
+enum CompanyStatus {
+  PENDING_ACTIVATION
+  ACTIVE
+  SUSPENDED
+
+  @@map("company_status")
+  @@schema("app_private")
+}
+
+enum CompanyRole {
+  COMPANY_ADMIN
+  SELLER
+
+  @@map("company_role")
+  @@schema("app_private")
+}
+
+// Estado técnico privado: no forma parte del contrato HTTP ni acredita lectura.
+enum OutboxState {
+  PENDING
+  PROCESSING
+  RETRY_PENDING
+  SMTP_ACCEPTED
+  FAILED
+  CANCELLED
+  EXPIRED
+
+  @@map("outbox_state")
+  @@schema("app_private")
+}
+
+model Company {
+  id           String               @id @default(uuid(4)) @db.Uuid
+  tradeName    String               @map("trade_name") @db.VarChar(150)
+  legalName    String               @map("legal_name") @db.VarChar(250)
+  ruc          String               @unique @db.VarChar(13)
+  taxAddress   String               @map("tax_address") @db.VarChar(300)
+  contactEmail String               @map("contact_email") @db.VarChar(254)
+  contactPhone String               @map("contact_phone") @db.VarChar(16)
+  status       CompanyStatus        @default(PENDING_ACTIVATION)
+  activatedAt  DateTime?            @map("activated_at") @db.Timestamptz(3)
+  createdAt    DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime             @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+  memberships  Membership[]
+  branches     Branch[]
+  invitation   Invitation?
+  emissions    InvitationEmission[]
+
+  @@index([createdAt, id])
+  @@map("company")
+  @@schema("app_private")
+}
+
+model User {
+  id                  String               @id @default(uuid(4)) @db.Uuid
+  emailNormalized     String               @unique @map("email_normalized") @db.VarChar(254)
+  passwordHash        String               @map("password_hash") @db.Text
+  createdAt           DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt           DateTime             @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+  memberships         Membership[]
+  platformAdmin       PlatformAdmin?
+  sessions            Session[]
+  acceptedInvitations Invitation[]         @relation("InvitationAcceptor")
+  emissions           InvitationEmission[]
+
+  @@map("app_user")
+  @@schema("app_private")
+}
+
+model Membership {
+  id        String      @id @default(uuid(4)) @db.Uuid
+  userId    String      @map("user_id") @db.Uuid
+  companyId String      @map("company_id") @db.Uuid
+  role      CompanyRole
+  createdAt DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime    @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+  user      User        @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  company   Company     @relation(fields: [companyId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@unique([userId, companyId])
+  @@index([companyId, createdAt, id])
+  @@map("membership")
+  @@schema("app_private")
+}
+
+model Branch {
+  id        String   @id @default(uuid(4)) @db.Uuid
+  companyId String   @map("company_id") @db.Uuid
+  name      String   @db.VarChar(150)
+  address   String   @db.VarChar(300)
+  email     String?  @db.VarChar(254)
+  phone     String?  @db.VarChar(16)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+  company   Company  @relation(fields: [companyId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@unique([companyId, id])
+  @@index([companyId, createdAt, id])
+  @@map("branch")
+  @@schema("app_private")
+}
+
+model PlatformAdmin {
+  userId    String   @id @map("user_id") @db.Uuid
+  grantedAt DateTime @default(now()) @map("granted_at") @db.Timestamptz(3)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@map("platform_admin")
+  @@schema("app_private")
+}
+
+model Invitation {
+  id               String               @id @default(uuid(4)) @db.Uuid
+  companyId        String               @unique @map("company_id") @db.Uuid
+  emailNormalized  String               @map("email_normalized") @db.VarChar(254)
+  generation       Int                  @default(1)
+  tokenHash        Bytes                @unique @map("token_hash") @db.ByteA
+  issuedAt         DateTime             @map("issued_at") @db.Timestamptz(3)
+  expiresAt        DateTime             @map("expires_at") @db.Timestamptz(3)
+  acceptedAt       DateTime?            @map("accepted_at") @db.Timestamptz(3)
+  acceptedByUserId String?              @map("accepted_by_user_id") @db.Uuid
+  createdAt        DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime             @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+  company          Company              @relation(fields: [companyId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  acceptedBy       User?                @relation("InvitationAcceptor", fields: [acceptedByUserId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  outbox           InvitationOutbox[]
+  emissions        InvitationEmission[]
+
+  @@unique([id, companyId])
+  @@index([acceptedByUserId])
+  @@map("invitation")
+  @@schema("app_private")
+}
+
+model Session {
+  id                       String                @id @default(uuid(4)) @db.Uuid
+  userId                   String                @map("user_id") @db.Uuid
+  createdAt                DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
+  absoluteExpiresAt        DateTime              @map("absolute_expires_at") @db.Timestamptz(3)
+  revokedAt                DateTime?             @map("revoked_at") @db.Timestamptz(3)
+  revocationReason         String?               @map("revocation_reason") @db.Text
+  currentRefreshGeneration Int                   @default(1) @map("current_refresh_generation")
+  user                     User                  @relation(fields: [userId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  history                  RefreshTokenHistory[] @relation("SessionHistory")
+  // Prisma expresa la FK; 002 la cambia a DEFERRABLE INITIALLY DEFERRED.
+  currentRefresh           RefreshTokenHistory   @relation("CurrentRefresh", fields: [id, currentRefreshGeneration], references: [sessionId, generation], onDelete: Restrict, onUpdate: Restrict, map: "app_session_current_refresh_fkey")
+
+  @@index([userId, createdAt, id])
+  @@map("app_session")
+  @@schema("app_private")
+}
+
+model RefreshTokenHistory {
+  id                 String    @id @default(uuid(4)) @db.Uuid
+  sessionId          String    @map("session_id") @db.Uuid
+  generation         Int
+  tokenHash          Bytes     @unique @map("token_hash") @db.ByteA
+  issuedAt           DateTime  @map("issued_at") @db.Timestamptz(3)
+  replacedAt         DateTime? @map("replaced_at") @db.Timestamptz(3)
+  session            Session   @relation("SessionHistory", fields: [sessionId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  currentForSessions Session[] @relation("CurrentRefresh")
+
+  @@unique([sessionId, generation])
+  @@map("refresh_token_history")
+  @@schema("app_private")
+}
+
+model InvitationOutbox {
+  id                 String      @id @default(uuid(4)) @db.Uuid
+  invitationId       String      @map("invitation_id") @db.Uuid
+  // Histórico: no FK a la generación mutable del slot Invitation.
+  generation         Int
+  type               String      @default("INITIAL_ADMIN_INVITATION") @db.Text
+  encryptedPayload   Bytes?      @map("encrypted_payload") @db.ByteA
+  keyId              String      @map("key_id") @db.Text
+  nonce              Bytes       @db.ByteA
+  authTag            Bytes       @map("auth_tag") @db.ByteA
+  createdAt          DateTime    @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime    @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
+  availableAt        DateTime    @default(now()) @map("available_at") @db.Timestamptz(3)
+  attempts           Int         @default(0)
+  state              OutboxState @default(PENDING)
+  leaseId            String?     @map("lease_id") @db.Uuid
+  leaseExpiresAt     DateTime?   @map("lease_expires_at") @db.Timestamptz(3)
+  smtpAcceptedAt     DateTime?   @map("smtp_accepted_at") @db.Timestamptz(3)
+  sanitizedErrorCode String?     @map("sanitized_error_code") @db.Text
+  invitation         Invitation  @relation(fields: [invitationId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@unique([invitationId, generation, type])
+  // Unicidad del nonce por clave, también después de limpiar el ciphertext.
+  @@unique([keyId, nonce])
+  @@index([state, availableAt, id])
+  @@map("invitation_outbox")
+  @@schema("app_private")
+}
+
+model InvitationEmission {
+  id             String     @id @default(uuid(4)) @db.Uuid
+  invitationId   String     @map("invitation_id") @db.Uuid
+  generation     Int
+  companyId      String     @map("company_id") @db.Uuid
+  issuedByUserId String     @map("issued_by_user_id") @db.Uuid
+  issuedAt       DateTime   @map("issued_at") @db.Timestamptz(3)
+  invitation     Invitation @relation(fields: [invitationId, companyId], references: [id, companyId], onDelete: Restrict, onUpdate: Restrict)
+  company        Company    @relation(fields: [companyId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  issuedBy       User       @relation(fields: [issuedByUserId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@unique([invitationId, generation])
+  @@index([companyId, issuedAt, id])
+  @@index([issuedByUserId, issuedAt, id])
+  @@map("invitation_emission")
+  @@schema("app_private")
+}
