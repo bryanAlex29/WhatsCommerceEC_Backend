@@ -9,7 +9,8 @@ import { AuthError } from './errors.js';
 const email = 'synthetic@example.test'; const password = 'SyntheticNewPassword!';
 function fixture() {
   const crypto = new RecoveryCrypto(randomBytes(32),randomBytes(32));
-  const persistence: RecoveryPort = { request: jest.fn<RecoveryPort['request']>().mockResolvedValue(undefined), reset: jest.fn<RecoveryPort['reset']>().mockResolvedValue(true) };
+  const persistence: RecoveryPort = { request: jest.fn<RecoveryPort['request']>().mockResolvedValue(undefined), reset: jest.fn<RecoveryPort['reset']>().mockResolvedValue(true),
+    verify: jest.fn<RecoveryPort['verify']>().mockResolvedValue('2027-01-01T00:00:00.000Z'), complete: jest.fn<RecoveryPort['complete']>().mockResolvedValue(true) };
   const limits: RateLimitPort = { checkLoginFailures: async () => {}, consume: jest.fn<RateLimitPort['consume']>().mockResolvedValue(undefined) };
   return { crypto,persistence,limits,service: new RecoveryService(persistence,limits,crypto) };
 }
@@ -70,5 +71,20 @@ describe('recuperación: criptografía real, puertos simulados, sin SMTP', () =>
     expect(delivery.finish).toHaveBeenCalledWith(id,expect.any(String),false);
     jest.mocked(mailer.send).mockResolvedValue(true); await deliverRecovery(id,delivery,f.crypto,mailer);
     expect(delivery.finish).toHaveBeenLastCalledWith(id,expect.any(String),true);
+  });
+  it('verificar emite pase aleatorio, persiste solo hash y complete acepta ocho caracteres', async () => {
+    const f = fixture(); const verified = await f.service.verify(email, '00001234', 'ip');
+    expect(verified.resetToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(f.persistence.verify).toHaveBeenCalledWith(email, f.crypto.mac(email, '00001234'), f.crypto.resetHash(verified.resetToken));
+    await f.service.complete(email, verified.resetToken, 'Abcdefg!', 'ip');
+    const [normalized, hash, phc] = jest.mocked(f.persistence.complete).mock.calls[0]!;
+    expect(normalized).toBe(email); expect(hash).toBe(f.crypto.resetHash(verified.resetToken)); expect(await verifyPassword(phc, 'Abcdefg!')).toBe(true);
+    expect(f.persistence.reset).not.toHaveBeenCalled();
+  });
+  it('no emite pase tras un código rechazado y complete no permite password de siete', async () => {
+    const f = fixture(); jest.mocked(f.persistence.verify).mockResolvedValue(null);
+    await expect(f.service.verify(email, '00001234', 'ip')).rejects.toMatchObject({ code: 'INVALID_RECOVERY_CODE' });
+    await expect(f.service.complete(email, f.crypto.resetToken(), 'Abcdef!', 'ip')).rejects.toMatchObject({ code: 'VALIDATION_ERROR' });
+    expect(f.persistence.complete).not.toHaveBeenCalled();
   });
 });

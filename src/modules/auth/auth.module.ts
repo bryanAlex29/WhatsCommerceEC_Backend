@@ -77,6 +77,18 @@ export class AuthController {
     const input = body(request, ['email', 'code', 'password']);
     await recovery.reset(input.email ?? '', input.code ?? '', input.password ?? '', this.ip(request));
   }
+  @Post('auth/password-recovery/verify') @HttpCode(200) @Header('Cache-Control', 'no-store')
+  async recoveryVerify(@Req() request: AuthRequest) {
+    const { recovery } = await this.runtime.ready(); if (!recovery) unavailable(); query(request);
+    const input = body(request, ['email', 'code']);
+    return recovery.verify(input.email ?? '', input.code ?? '', this.ip(request));
+  }
+  @Post('auth/password-recovery/complete') @HttpCode(204) @Header('Cache-Control', 'no-store')
+  async recoveryComplete(@Req() request: AuthRequest): Promise<void> {
+    const { recovery } = await this.runtime.ready(); if (!recovery) unavailable(); query(request);
+    const input = body(request, ['email', 'resetToken', 'password']);
+    await recovery.complete(input.email ?? '', input.resetToken ?? '', input.password ?? '', this.ip(request));
+  }
   @Post('auth/login') @HttpCode(200) @Header('Cache-Control', 'no-store')
   async login(@Req() request: AuthRequest) {
     const { service } = await this.runtime.ready();

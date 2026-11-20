@@ -12,7 +12,8 @@ import { RateLimitError } from '../src/modules/auth/rate-limit.js';
 
 describe('recuperación HTTP real, persistencia/cuotas simuladas; no SMTP',()=>{
   let app:INestApplication;
-  const port:RecoveryPort={request:jest.fn<RecoveryPort['request']>().mockResolvedValue(undefined),reset:jest.fn<RecoveryPort['reset']>().mockResolvedValue(true)};
+  const port:RecoveryPort={request:jest.fn<RecoveryPort['request']>().mockResolvedValue(undefined),reset:jest.fn<RecoveryPort['reset']>().mockResolvedValue(true),
+    verify:jest.fn<RecoveryPort['verify']>().mockResolvedValue('2027-01-01T00:00:00.000Z'),complete:jest.fn<RecoveryPort['complete']>().mockResolvedValue(true)};
   const consume=jest.fn<(scope:string,key:string)=>Promise<void>>().mockResolvedValue(undefined);
   beforeAll(async()=>{
     const recovery=new RecoveryService(port,{consume,checkLoginFailures:async()=>{}},new RecoveryCrypto(randomBytes(32),randomBytes(32)));
@@ -20,7 +21,7 @@ describe('recuperación HTTP real, persistencia/cuotas simuladas; no SMTP',()=>{
     app=module.createNestApplication();app.setGlobalPrefix('api');app.use(authJsonMiddleware(true));await app.init();
   });
   afterAll(async()=>{await app.close();});
-  beforeEach(()=>{jest.mocked(port.reset).mockResolvedValue(true);consume.mockResolvedValue(undefined);});
+  beforeEach(()=>{jest.mocked(port.reset).mockResolvedValue(true);jest.mocked(port.verify).mockResolvedValue('2027-01-01T00:00:00.000Z');jest.mocked(port.complete).mockResolvedValue(true);consume.mockResolvedValue(undefined);});
   it('solicitud pública202 genérica, no tokens ni secreto',async()=>{
     const result=await request(app.getHttpServer()).post('/api/auth/password-recovery/request').send({email:'synthetic@example.test'}).expect(202);
     expect(result.body).toEqual({message:recoveryMessage});expect(result.headers['cache-control']).toBe('no-store');
@@ -36,12 +37,23 @@ describe('recuperación HTTP real, persistencia/cuotas simuladas; no SMTP',()=>{
     const result=await request(app.getHttpServer()).post('/api/auth/password-recovery/request').send({email:'synthetic@example.test'}).expect(429);
     expect(result.headers['retry-after']).toBe('60');
   });
-  it.each(['request','reset'])('parser estricto, sin query/contexto ni exceso16KiB: %s',async operation=>{
+  it.each(['request','reset','verify','complete'])('parser estricto, sin query/contexto ni exceso16KiB: %s',async operation=>{
     const url=`/api/auth/password-recovery/${operation}`;
     await request(app.getHttpServer()).post(url).set('Content-Type','application/json').send('{"email":"a@example.test","email":"b@example.test"}').expect(400);
     await request(app.getHttpServer()).post(url).send({email:'x'.repeat(17000)}).expect(413);
     await request(app.getHttpServer()).post(url).set('Content-Type','text/plain').send('x').expect(415);
     await request(app.getHttpServer()).post(`${url}?companyId=x`).send({email:'synthetic@example.test'}).expect(400);
     await request(app.getHttpServer()).post(url).send({email:'synthetic@example.test',companyId:'x'}).expect(400);
+  });
+  it('verify200 con pase sin sesión, complete204 y mínimo8 real; no-store', async () => {
+    const verified = await request(app.getHttpServer()).post('/api/auth/password-recovery/verify').send({email:'synthetic@example.test',code:'00001234'}).expect(200);
+    expect(Object.keys(verified.body).sort()).toEqual(['expiresAt','resetToken']); expect(verified.headers['cache-control']).toBe('no-store');
+    await request(app.getHttpServer()).post('/api/auth/password-recovery/complete').send({email:'synthetic@example.test',resetToken:verified.body.resetToken,password:'Abcdef!'}).expect(400);
+    await request(app.getHttpServer()).post('/api/auth/password-recovery/complete').send({email:'synthetic@example.test',resetToken:verified.body.resetToken,password:'Abcdefg!'}).expect(204);
+    jest.mocked(port.verify).mockResolvedValue(null);
+    const denied = await request(app.getHttpServer()).post('/api/auth/password-recovery/verify').send({email:'synthetic@example.test',code:'00001234'}).expect(400);
+    expect(denied.body.error.code).toBe('INVALID_RECOVERY_CODE');
+    jest.mocked(port.complete).mockResolvedValue(false);
+    await request(app.getHttpServer()).post('/api/auth/password-recovery/complete').send({email:'synthetic@example.test',resetToken:verified.body.resetToken,password:'Abcdefg!'}).expect(400);
   });
 });

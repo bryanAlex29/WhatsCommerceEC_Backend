@@ -83,7 +83,12 @@ interface BackupPayload {
   version: number; database: string; dump: string; roles: string; dumpSha256: string; fingerprints: Fingerprint[];
   profiles: Record<string, string>;
 }
-async function backupAndRestore(client: Client): Promise<{ folder: string; data: Fingerprint[] }> {
+export interface BackupOptions {
+  profileRoot?: string;
+  profileFiles?: readonly string[];
+  afterRestore?: (psql: (sql: string) => string) => void;
+}
+export async function backupAndRestore(client: Client, options: BackupOptions = {}): Promise<{ folder: string; data: Fingerprint[] }> {
   step = 'backup_snapshot';
   const folder = privateDirectory();
   let payload: BackupPayload;
@@ -95,9 +100,12 @@ async function backupAndRestore(client: Client): Promise<{ folder: string; data:
     const dump = docker(['exec', source, 'pg_dump', '-U', adminUser, '-d', database, '-Fc', '--snapshot', snapshot]);
     const roles = docker(['exec', source, 'pg_dumpall', '-U', adminUser, '--roles-only']);
     const profiles: Record<string, string> = {};
-    for (const file of ['.env.auth-admin', '.env.auth-dev', '.env.recovery-dev', '.env.gmail-api-dev']) if (existsSync(resolve(root, file))) {
-      gate(lstatSync(resolve(root, file)).isFile() && !lstatSync(resolve(root, file)).isSymbolicLink());
-      profiles[file] = readFileSync(resolve(root, file)).toString('base64');
+    for (const file of options.profileFiles ?? ['.env.auth-admin', '.env.auth-dev', '.env.recovery-dev', '.env.gmail-api-dev']) {
+      gate(/^\.env\.[a-z-]+$/.test(file));
+      const path = resolve(options.profileRoot ?? root, file);
+      if (!existsSync(path)) continue;
+      gate(lstatSync(path).isFile() && !lstatSync(path).isSymbolicLink());
+      profiles[file] = readFileSync(path).toString('base64');
     }
     payload = { version: 1, database, dump: dump.toString('base64'), roles: roles.toString('base64'), dumpSha256: checksum(dump), fingerprints: data, profiles };
     const key = randomBytes(32);
@@ -123,7 +131,12 @@ async function backupAndRestore(client: Client): Promise<{ folder: string; data:
       try { ready = psql('SELECT 1') === '1'; if (ready) break; } catch { /* Isolated clone only. */ }
       await setTimeout(250);
     }
-    gate(ready); psql(Buffer.from(restored.roles, 'base64').toString('utf8'));
+    gate(ready);
+    const isolation = JSON.parse(docker(['inspect', clone]).toString()) as Array<{ HostConfig: { NetworkMode: string; PortBindings: unknown }; Mounts: Array<{ Name?: string; Type: string }> }>;
+    gate(isolation.length === 1 && isolation[0]!.HostConfig.NetworkMode === 'none' &&
+      Object.keys(isolation[0]!.HostConfig.PortBindings ?? {}).length === 0 &&
+      isolation[0]!.Mounts.every(mount => mount.Type === 'volume' && mount.Name !== `${project}_postgres_data`));
+    psql(Buffer.from(restored.roles, 'base64').toString('utf8'));
     docker(['exec', '-i', clone, 'pg_restore', '--exit-on-error', '-U', 'wc_restore_check', '-d', database], Buffer.from(restored.dump, 'base64'));
     const data: Fingerprint[] = [];
     for (const expected of restored.fingerprints) {
@@ -132,8 +145,11 @@ async function backupAndRestore(client: Client): Promise<{ folder: string; data:
       data.push({ table: expected.table, ...row });
     }
     same(restored.fingerprints, data);
+    gate(JSON.stringify(restored.profiles) === JSON.stringify(payload.profiles));
     writeFileSync(resolve(folder, 'verified.json'), JSON.stringify({ version: 1, verifiedAt: new Date().toISOString(), dumpSha256: restored.dumpSha256,
-      restoreChecked: true, tablesVerified: data.length, encryption: 'AES-256-GCM + Windows DPAPI CurrentUser', sql006: checksum(readFileSync(sqlPath)) }), { flag: 'wx', mode: 0o600 });
+      restoreChecked: true, tablesVerified: data.length, profilesVerified: Object.keys(restored.profiles),
+      encryption: 'AES-256-GCM + Windows DPAPI CurrentUser', sql006: checksum(readFileSync(sqlPath)) }), { flag: 'wx', mode: 0o600 });
+    options.afterRestore?.(psql);
     console.log(`COMPANIES_BACKUP_RESTORE_OK tables=${data.length} encryptedFolder=${folder}`);
     return { folder, data: restored.fingerprints.filter(row => row.table.startsWith('app_private.')) };
   } finally { if (started) docker(['stop', clone]); }

@@ -29,6 +29,25 @@ export class PrismaRecoveryPort extends ScopedPersistence implements RecoveryPor
       return code === 'OK';
     });
   }
+  verify(email: string, mac: string, resetHash: string): Promise<string | null> {
+    return this.transaction('recovery_verify', undefined, undefined, async tx => {
+      const rows = await tx.$queryRaw`SELECT app_api.recovery_verify(${email}::text,${mac}::text,${resetHash}::text) AS result`;
+      const code = envelope(rows);
+      if (code === 'INVALID_RECOVERY_CODE') return null;
+      if (code !== 'OK') return unavailable();
+      const value = one(rows) as { expiresAt?: unknown };
+      if (typeof value.expiresAt !== 'string' || !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(value.expiresAt) ||
+        !Number.isFinite(Date.parse(value.expiresAt)) || new Date(value.expiresAt).toISOString() !== value.expiresAt) return unavailable();
+      return value.expiresAt;
+    });
+  }
+  complete(email: string, resetHash: string, passwordHash: string): Promise<boolean> {
+    return this.transaction('recovery_complete', undefined, undefined, async tx => {
+      const code = envelope(await tx.$queryRaw`SELECT app_api.recovery_complete(${email}::text,${resetHash}::text,${passwordHash}::text) AS result`);
+      if (code !== 'OK' && code !== 'INVALID_RECOVERY_CODE') return unavailable();
+      return code === 'OK';
+    });
+  }
 }
 export class PrismaRecoveryDeliveryPort extends ScopedPersistence implements RecoveryDeliveryPort {
   constructor(client: PrismaClient) { super(client, 'wc_delivery'); }

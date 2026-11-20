@@ -53,7 +53,7 @@ export function parseStrictJson(text: string): Record<string, unknown> {
 
 export interface AuthRequest extends IncomingMessage { body?: unknown; ip?: string; params: Record<string, string> }
 // Express/Nest enruta sin distinguir mayúsculas por defecto; la guarda debe coincidir.
-const routes = /^\/api\/(?:auth\/(?:login|refresh|logout|me|password-recovery\/(?:request|reset))|me\/companies|companies\/[^/]+)\/?$/i;
+const routes = /^\/api\/(?:auth\/(?:login|refresh|logout|me|password-recovery\/(?:request|reset|verify|complete))|me\/companies|companies\/[^/]+)\/?$/i;
 const companyRoutes = /^\/api\/(?:platform\/companies(?:\/[^/]+(?:\/(?:suspend|reactivate|branches(?:\/[^/]+)?))?)?|companies\/[^/]+\/branches)\/?$/i;
 const invitationRoutes = /^\/api\/(?:auth\/invitations\/(?:accept-new|accept)|platform\/companies\/[^/]+\/initial-invitation(?:\/resend)?)\/?$/i;
 /** Antes del parser de Nest; valida cuerpos solo en las rutas de acceso/contexto/empresas. */
@@ -68,7 +68,7 @@ export function authJsonMiddleware(enabled: boolean) {
       response.setHeader('Content-Type', 'application/json');
       response.end(JSON.stringify({ error: { code, message: status === 400 ? 'Entrada inválida' : 'Solicitud rechazada' } }));
     };
-    const expectsBody = (request.method === 'POST' && /\/auth\/(login|refresh|logout|password-recovery\/(?:request|reset))\/?$/i.test(path)) ||
+    const expectsBody = (request.method === 'POST' && /\/auth\/(login|refresh|logout|password-recovery\/(?:request|reset|verify|complete))\/?$/i.test(path)) ||
       (request.method === 'POST' && /^\/api\/platform\/companies(?:\/[^/]+\/branches)?\/?$/i.test(path)) ||
       (request.method === 'PATCH' && /^\/api\/platform\/companies\/[^/]+(?:\/branches\/[^/]+)?\/?$/i.test(path)) ||
       (request.method === 'POST' && /^\/api\/(?:auth\/invitations\/(?:accept-new|accept)|platform\/companies\/[^/]+\/initial-invitation)\/?$/i.test(path));

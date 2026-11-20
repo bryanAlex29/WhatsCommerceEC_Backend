@@ -48,6 +48,8 @@ describe('Entrada Unicode/IDNA Node22', () => {
     expect(() => canonicalEmail(value)).toThrow();
   });
   it('composición Unicode nueva; espacios, invisibles, sustitutos inválidos', () => {
+    expect(newPasswordValid('Abcdef!')).toBe(false); // Siete puntos de código.
+    expect(newPasswordValid('Abcdefg!')).toBe(true); // Ocho, sin números obligatorios.
     expect(newPasswordValid('ContraseñaLarga!')).toBe(true);
     expect(newPasswordValid('Contraseña Larga!')).toBe(false);
     expect(newPasswordValid('ContraseñaLarga!\u200b')).toBe(false);

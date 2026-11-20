@@ -29,6 +29,6 @@ export function newPasswordValid(value: string): boolean {
   // Los números están permitidos, pero no son obligatorios. No restringir la
   // contraseña a una lista de letras/símbolos ni transformar su contenido.
   const length = [...value].length;
-  return length >= 15 && length <= 128 && validUnicode(value) &&
+  return length >= 8 && length <= 128 && validUnicode(value) &&
     !/[\p{White_Space}\p{Cf}]/u.test(value) && /\p{Lu}/u.test(value) && /[\p{P}\p{S}]/u.test(value);
 }

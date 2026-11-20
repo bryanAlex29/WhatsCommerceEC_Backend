@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, createHmac, randomBytes, randomInt, randomUUID } from 'node:crypto';
+import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, randomInt, randomUUID } from 'node:crypto';
 import { hashPassword } from './crypto.js';
 import { AuthError } from './errors.js';
 import { canonicalEmail, newPasswordValid } from './input.js';
@@ -9,6 +9,8 @@ export interface SealedRecovery { payload: string; nonce: string; tag: string }
 export interface RecoveryPort {
   request(email: string, id: string, mac: string, sealed: SealedRecovery): Promise<void>;
   reset(email: string, mac: string, passwordHash: string): Promise<boolean>;
+  verify(email: string, mac: string, resetHash: string): Promise<string | null>;
+  complete(email: string, resetHash: string, passwordHash: string): Promise<boolean>;
 }
 export interface RecoveryDeliveryPort {
   pending(): Promise<string[]>;
@@ -20,6 +22,8 @@ export class RecoveryCrypto {
     if (macKey.length !== 32 || encryptionKey.length !== 32 || macKey.equals(encryptionKey)) throw new Error('Configuración de recuperación inválida');
   }
   code(): string { return String(randomInt(100000000)).padStart(8, '0'); }
+  resetToken(): string { return randomBytes(32).toString('base64url'); }
+  resetHash(token: string): string { return createHash('sha256').update('password-recovery-reset-token\0').update(token).digest('hex'); }
   mac(email: string, code: string): string {
     return createHmac('sha256', this.macKey).update('password-recovery\0').update(email).update('\0').update(code).digest('hex');
   }
@@ -63,6 +67,23 @@ export class RecoveryService {
     const accepted = await this.persistence.reset(normalized, this.crypto.mac(normalized, code), phc);
     // Error fuera de la transacción: los intentos incorrectos deben quedar confirmados.
     if (!accepted) throw new AuthError(400, 'INVALID_RECOVERY_CODE', 'Código inválido o vencido');
+  }
+  async verify(email: string, code: string, ip: string): Promise<{ resetToken: string; expiresAt: string }> {
+    await this.limits.consume('recovery-reset-ip', ip);
+    const normalized = canonicalEmail(email);
+    if (!/^[0-9]{8}$/.test(code)) throw new AuthError(400, 'VALIDATION_ERROR', 'Revisa el código', [{ field: 'code', code: 'FORMAT' }]);
+    const resetToken = this.crypto.resetToken();
+    const expiresAt = await this.persistence.verify(normalized, this.crypto.mac(normalized, code), this.crypto.resetHash(resetToken));
+    if (!expiresAt) throw new AuthError(400, 'INVALID_RECOVERY_CODE', 'Código inválido o vencido');
+    return { resetToken, expiresAt };
+  }
+  async complete(email: string, resetToken: string, password: string, ip: string): Promise<void> {
+    await this.limits.consume('recovery-reset-ip', ip);
+    const normalized = canonicalEmail(email);
+    if (!/^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/.test(resetToken)) throw new AuthError(400, 'VALIDATION_ERROR', 'Revisa el pase de recuperación');
+    if (!newPasswordValid(password)) throw new AuthError(400, 'VALIDATION_ERROR', 'Revisa la contraseña', [{ field: 'password', code: 'PASSWORD_POLICY' }]);
+    const phc = await hashPassword(password);
+    if (!await this.persistence.complete(normalized, this.crypto.resetHash(resetToken), phc)) throw new AuthError(400, 'INVALID_RECOVERY_CODE', 'Código inválido o vencido');
   }
 }
 

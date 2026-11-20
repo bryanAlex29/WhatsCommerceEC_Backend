@@ -39,7 +39,7 @@ try {
     await setTimeout(250);
   }
   assert.ok(ready);
-  for (const file of ['000_roles.sql','001_schema.sql','002_constraints.sql','003_rls.sql','004_auth_context.sql','005_password_recovery.sql','006_companies.sql']) run(readFileSync(new URL(`../prisma/sql/${file}`,import.meta.url),'utf8'));
+  for (const file of ['000_roles.sql','001_schema.sql','002_constraints.sql','003_rls.sql','004_auth_context.sql','005_password_recovery.sql','006_companies.sql','008_recovery_steps.sql']) run(readFileSync(new URL(`../prisma/sql/${file}`,import.meta.url),'utf8'));
   run(`INSERT INTO app_private.app_user(id,email_normalized,password_hash) VALUES(${quote(uid)},${quote(email)},${quote(oldHash)})`);
   const session = JSON.parse(scoped('wc_identity','create_session',`SELECT app_api.identity_create_session_checked(${quote(uid)},${quote(sid)},${quote(randomUUID())},${quote('a'.repeat(64))},${quote(oldHash)})`,uid,sid)) as { code: string };
   check(session.code === 'OK');
@@ -107,6 +107,49 @@ try {
   scoped('wc_delivery','recovery_finish',`SELECT app_api.recovery_finish(${quote(seventh)},${quote(finalLease)},true)`);
   check(run(`SELECT encrypted_payload IS NULL AND state='SMTP_ACCEPTED' FROM app_private.password_recovery WHERE id=${quote(seventh)}`)==='t');
   check(reset('77778888').code==='OK');
+  const grant = crypto.resetToken(); const grantHash = crypto.resetHash(grant);
+  const verify = (code: string, hash = grantHash, address = email) => JSON.parse(scoped('wc_identity','recovery_verify',`SELECT app_api.recovery_verify(${quote(address)},${quote(crypto.mac(address,code))},${quote(hash)})`)) as {code:string;expiresAt?:string};
+  const complete = (hash = grantHash, address = email) => JSON.parse(scoped('wc_identity','recovery_complete',`SELECT app_api.recovery_complete(${quote(address)},${quote(hash)},${quote(oldHash)})`)) as {code:string};
+  const eighth = randomUUID(); request(eighth,'12345678');
+  check(verify('12345678',grantHash,'unknown@example.test').code==='INVALID_RECOVERY_CODE');
+  check(verify('99999999').code==='INVALID_RECOVERY_CODE');
+  check(run(`SELECT verification_attempts FROM app_private.password_recovery WHERE id=${quote(eighth)}`)==='1');
+  const verified = verify('12345678'); check(verified.code==='OK' && typeof verified.expiresAt==='string');
+  check(run(`SELECT encode(reset_token_hash,'hex') FROM app_private.password_recovery WHERE id=${quote(eighth)}`)===grantHash);
+  check(run(`SELECT password_hash FROM app_private.app_user WHERE id=${quote(uid)}`)===newHash);
+  check(verify('12345678').code==='INVALID_RECOVERY_CODE');
+  check(reset('12345678').code==='INVALID_RECOVERY_CODE'); // Cannot bypass a verified grant through old API.
+  check(complete('f'.repeat(64)).code==='INVALID_RECOVERY_CODE');
+  check(complete(grantHash,'other-synthetic@example.test').code==='INVALID_RECOVERY_CODE');
+  const freshSid=randomUUID();
+  scoped('wc_identity','create_session',`SELECT app_api.identity_create_session_checked(${quote(uid)},${quote(freshSid)},${quote(randomUUID())},${quote('e'.repeat(64))},${quote(newHash)})`,uid,freshSid);
+  // Separate processes contend on the same User/recovery locks.
+  const completeSql = `BEGIN; SET LOCAL ROLE wc_identity; SET LOCAL wc.operation='recovery_complete'; SET LOCAL wc.user_id=''; SET LOCAL wc.session_id=''; SET LOCAL wc.company_id=''; DO $$ BEGIN PERFORM set_config('wc.tx_marker',txid_current()::text,true); END $$; SELECT app_api.recovery_complete(${quote(email)},${quote(grantHash)},${quote(oldHash)}); COMMIT;`;
+  const completed = await Promise.all([1,2].map(async()=>{const result=await execAsync('docker',['exec',name,'psql','-X','-qAt','-v','ON_ERROR_STOP=1','-U','postgres','-c',completeSql],{timeout:30000});return JSON.parse(result.stdout.trim()) as {code:string};}));
+  check(completed.filter(v=>v.code==='OK').length===1); check(completed.filter(v=>v.code==='INVALID_RECOVERY_CODE').length===1);
+  check(run(`SELECT revoked_at IS NOT NULL FROM app_private.app_session WHERE id=${quote(freshSid)}`)==='t');
+  check(complete().code==='INVALID_RECOVERY_CODE');
+  const ninth=randomUUID();request(ninth,'22223333');check(verify('22223333').code==='OK');
+  request(randomUUID(),'44445555');check(complete().code==='INVALID_RECOVERY_CODE');
+  const tenth=randomUUID();request(tenth,'66667777');check(verify('66667777').code==='OK');
+  run(`UPDATE app_private.password_recovery SET issued_at=issued_at-interval '16 minutes',expires_at=expires_at-interval '16 minutes',verified_at=verified_at-interval '16 minutes' WHERE id=${quote(tenth)}`);
+  check(complete().code==='INVALID_RECOVERY_CODE');
+  const exhausted=randomUUID();request(exhausted,'88889999');for(let i=0;i<5;i++) verify('99999999');check(verify('88889999').code==='INVALID_RECOVERY_CODE');
+  check(run(`SELECT verification_attempts FROM app_private.password_recovery WHERE id=${quote(exhausted)}`)==='5');
+  check(run(`SELECT bool_and(relrowsecurity AND relforcerowsecurity) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='app_private' AND c.relname='password_recovery'`)==='t');
+  check(run("SELECT has_function_privilege('wc_tenant','app_api.recovery_verify(text,text,text)','EXECUTE')") === 'f');
+  check(run("SELECT NOT EXISTS(SELECT 1 FROM pg_proc p CROSS JOIN LATERAL aclexplode(coalesce(p.proacl,acldefault('f',p.proowner))) a WHERE p.oid='app_api.recovery_complete(text,text,text)'::regprocedure AND a.grantee=0 AND a.privilege_type='EXECUTE')") === 't');
+  const lastAttempt=randomUUID();request(lastAttempt,'12457890');for(let i=0;i<4;i++) verify('99999999');
+  check(verify('12457890').code==='OK');check(complete().code==='OK'); // Fifth correct check is still allowed.
+  const racing=randomUUID();request(racing,'31415926');
+  const candidateHashes=[crypto.resetHash(crypto.resetToken()),crypto.resetHash(crypto.resetToken())];
+  const verifiedRace=await Promise.all(candidateHashes.map(async hash=>{
+    const sql=`BEGIN; SET LOCAL ROLE wc_identity; SET LOCAL wc.operation='recovery_verify'; SET LOCAL wc.user_id=''; SET LOCAL wc.session_id=''; SET LOCAL wc.company_id=''; DO $$ BEGIN PERFORM set_config('wc.tx_marker',txid_current()::text,true); END $$; SELECT app_api.recovery_verify(${quote(email)},${quote(crypto.mac(email,'31415926'))},${quote(hash)}); COMMIT;`;
+    const result=await execAsync('docker',['exec',name,'psql','-X','-qAt','-v','ON_ERROR_STOP=1','-U','postgres','-c',sql],{timeout:30000});return JSON.parse(result.stdout.trim()) as {code:string};
+  }));
+  check(verifiedRace.filter(r=>r.code==='OK').length===1);check(verifiedRace.filter(r=>r.code==='INVALID_RECOVERY_CODE').length===1);
+  const winner=run(`SELECT encode(reset_token_hash,'hex') FROM app_private.password_recovery WHERE id=${quote(racing)}`);
+  check(candidateHashes.includes(winner)); check(complete(winner).code==='OK');
   console.log(`RECOVERY_POSTGRES_OK ${count} comprobaciones, PostgreSQL17 desechable; sin SMTP ni datos existentes.`);
 } catch { console.error('RECOVERY_POSTGRES_FAILED (sin SQL ni datos privados en salida)'); process.exitCode=1; }
 finally { if (started) execFileSync('docker',['stop',name], { stdio: 'ignore', timeout: 30000 }); }

@@ -9,7 +9,7 @@ import { checkReceipt, loadProfiles, safeError, sqlBundle, verifyAdmin } from '.
 
 const failureMessages = {
   EMAIL_INVALID: 'El correo no tiene un formato válido. Usa un correo con parte local ASCII y dominio válido.',
-  PASSWORD_POLICY: 'La contraseña admite números y debe tener 15–128 caracteres, una mayúscula y un símbolo, sin espacios, controles ni caracteres invisibles.',
+  PASSWORD_POLICY: 'La contraseña admite números y debe tener 8–128 caracteres, una mayúscula y un símbolo, sin espacios, controles ni caracteres invisibles.',
   PASSWORD_MISMATCH: 'Las contraseñas no coinciden. Vuelve a introducirlas.',
   ADMIN_EXISTS: 'Ya existe un administrador de plataforma. Este comando no permite crear otro ni cambiar su contraseña.',
   EMAIL_EXISTS: 'Ese correo ya pertenece a una cuenta. No se modifica ni se promueve automáticamente.',
